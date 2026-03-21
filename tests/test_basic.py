@@ -395,7 +395,7 @@ class TestBasicRoundtrip:
         from zindi.generate_rfs import write_rfs
 
         json_path = f"{self.tmpdir}/test.zindi.json"
-        write_rfs(self.rfs, json_path)
+        write_rfs(self.rfs, json_path, format="json")
 
         root = open_rfs(json_path)
         assert root.attrs["description"] == "test file"
@@ -404,3 +404,55 @@ class TestBasicRoundtrip:
         with h5py.File(self.h5_path, "r") as f:
             expected = f["acquisition/timeseries"][:]
         np.testing.assert_array_equal(arr[:], expected)
+
+    def test_write_and_read_parquet(self):
+        """RFS can be written as parquet directory and read back."""
+        from zindi.generate_rfs import write_rfs
+
+        parquet_dir = f"{self.tmpdir}/test.zindi"
+        write_rfs(self.rfs, parquet_dir, format="parquet")
+
+        import os
+
+        assert os.path.isdir(parquet_dir)
+        assert os.path.exists(f"{parquet_dir}/metadata.json")
+        assert os.path.exists(f"{parquet_dir}/chunk_refs.parquet")
+
+        root = open_rfs(parquet_dir)
+        assert root.attrs["description"] == "test file"
+
+        arr = root["acquisition/timeseries"]
+        with h5py.File(self.h5_path, "r") as f:
+            expected = f["acquisition/timeseries"][:]
+        np.testing.assert_array_equal(arr[:], expected)
+
+    def test_auto_format_small(self):
+        """Auto format uses JSON for small RFS."""
+        from zindi.generate_rfs import write_rfs
+
+        json_path = f"{self.tmpdir}/test_auto.zindi.json"
+        write_rfs(self.rfs, json_path, format="auto")
+
+        import os
+
+        assert os.path.isfile(json_path)
+
+    def test_auto_format_large(self):
+        """Auto format uses parquet when chunk count exceeds threshold."""
+        from zindi.generate_rfs import write_rfs
+
+        parquet_dir = f"{self.tmpdir}/test_auto_large.zindi"
+        # Use a very low threshold to trigger parquet
+        write_rfs(self.rfs, parquet_dir, format="auto", inline_threshold=1)
+
+        import os
+
+        assert os.path.isdir(parquet_dir)
+        assert os.path.exists(f"{parquet_dir}/chunk_refs.parquet")
+
+    def test_write_rfs_invalid_format(self):
+        """Invalid format raises ValueError."""
+        from zindi.generate_rfs import write_rfs
+
+        with pytest.raises(ValueError, match="Invalid format"):
+            write_rfs(self.rfs, f"{self.tmpdir}/bad", format="parqet")

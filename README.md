@@ -114,6 +114,29 @@ To prevent unbounded cache growth, set a size limit. Least-recently-accessed chu
 cache = LocalCache(max_size_bytes=500_000_000)  # 500 MB cap
 ```
 
+## Parquet storage for large files
+
+For HDF5 files with many chunks, the JSON reference file system can grow to tens of megabytes. Zindi can store chunk references in a compressed parquet file instead:
+
+```python
+from zindi import generate_rfs, write_rfs
+
+rfs = generate_rfs("large_file.nwb")
+write_rfs(rfs, "large_file.zindi", format="parquet")
+```
+
+This creates a directory with a small `metadata.json` and a zstd-compressed `chunk_refs.parquet`. Reading is automatic:
+
+```python
+root = open_rfs("large_file.zindi")  # auto-detects format
+```
+
+By default (`format="auto"`), `write_rfs` switches to parquet when there are more than 10,000 chunk references. Adjust the threshold with `inline_threshold`:
+
+```python
+write_rfs(rfs, "output.zindi", inline_threshold=5000)
+```
+
 ## Architecture
 
 ```
