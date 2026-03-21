@@ -145,6 +145,6 @@ pynwb NWBFile
 This is v0.1 — the following are not yet implemented:
 
 - Nested compound dtypes (structs within structs)
-- Object references in datasets (`_DTYPE = "object"`)
+- Cross-file object references (same-file references are supported)
 - External array links (`_EXTERNAL_ARRAY_LINK`)
 - Integration with `NWBZarrIO` (requires hdmf-zarr Zarr v3 migration)

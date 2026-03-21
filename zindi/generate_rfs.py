@@ -161,7 +161,7 @@ def _process_dataset(
     inline = _should_inline(ds)
 
     if inline:
-        _process_inline_dataset(ds, path, refs, attrs, is_scalar)
+        _process_inline_dataset(ds, path, refs, attrs, is_scalar, h5f)
         return
 
     # Build codec pipeline
@@ -214,12 +214,23 @@ def _process_inline_dataset(
     refs: dict,
     attrs: dict,
     is_scalar: bool,
+    h5f: h5py.File,
 ) -> None:
     """Process a small dataset by inlining its data."""
     data = ds[()]
 
     if is_scalar:
         shape = [1]
+        if isinstance(data, h5py.Reference):
+            # Scalar object reference — store target path as plain string
+            attrs["_SCALAR"] = True
+            attrs["_DTYPE"] = "object_reference"
+            target = h5f[data]
+            array_meta = _make_string_array_meta(shape, attrs)
+            refs[f"{path}/zarr.json"] = json.dumps(array_meta, separators=(",", ":"))
+            chunk_bytes = _encode_vlen_utf8([target.name])
+            refs[f"{path}/c/0"] = "base64:" + base64.b64encode(chunk_bytes).decode("ascii")
+            return
         if isinstance(data, bytes):
             data = data.decode("utf-8")
         if isinstance(data, str):
@@ -233,6 +244,30 @@ def _process_inline_dataset(
         else:
             data = np.array([data])
     else:
+        if h5py.check_dtype(ref=ds.dtype) == h5py.Reference:
+            # Object reference array — store target paths as plain strings
+            data = ds[...]
+            path_strs = []
+            for item in np.nditer(data, flags=["refs_ok"]):
+                val = item.item()
+                if isinstance(val, h5py.Reference):
+                    target = h5f[val]
+                    path_strs.append(target.name)
+                else:
+                    path_strs.append("")
+
+            shape = list(ds.shape)
+            attrs["_DTYPE"] = "object_reference"
+            array_meta = _make_string_array_meta(shape, attrs)
+            refs[f"{path}/zarr.json"] = json.dumps(array_meta, separators=(",", ":"))
+
+            chunk_bytes = _encode_vlen_utf8(path_strs)
+            chunk_key = "c/" + "/".join(["0"] * max(ds.ndim, 1))
+            refs[f"{path}/{chunk_key}"] = (
+                "base64:" + base64.b64encode(chunk_bytes).decode("ascii")
+            )
+            return
+
         if ds.dtype.kind in ("O", "U", "S"):
             # String array
             data = ds[...]
