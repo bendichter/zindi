@@ -50,7 +50,7 @@ def resolve_url(url: str) -> str:
 
 def _is_dandi_url(url: str) -> bool:
     return url.startswith("https://api.dandiarchive.org/api/") or url.startswith(
-        "https://api-staging.dandiarchive.org/"
+        "https://api.sandbox.dandiarchive.org/"
     )
 
 
@@ -61,8 +61,8 @@ def _resolve_dandi_url(url: str) -> str:
         api_key = os.environ.get("DANDI_API_KEY")
         if api_key:
             headers["Authorization"] = f"token {api_key}"
-    elif url.startswith("https://api-staging.dandiarchive.org/"):
-        api_key = os.environ.get("DANDI_STAGING_API_KEY")
+    elif url.startswith("https://api.sandbox.dandiarchive.org/"):
+        api_key = os.environ.get("DANDI_SANDBOX_API_KEY")
         if api_key:
             headers["Authorization"] = f"token {api_key}"
     resp = requests.head(url, allow_redirects=True, headers=headers)

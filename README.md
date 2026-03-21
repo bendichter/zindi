@@ -76,8 +76,8 @@ For embargoed datasets, set the appropriate environment variable:
 
 ```bash
 export DANDI_API_KEY=your_token_here
-# or for staging:
-export DANDI_STAGING_API_KEY=your_token_here
+# or for sandbox:
+export DANDI_SANDBOX_API_KEY=your_token_here
 ```
 
 ## Unified convention
