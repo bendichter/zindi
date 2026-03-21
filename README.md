@@ -94,6 +94,26 @@ The generated JSON follows the [unified Zarr v3 convention](https://github.com/h
 | NaN/Inf in attrs | Encoded as `"NaN"`, `"Infinity"`, `"-Infinity"` strings |
 | Strings | `data_type: "string"` with `vlen-utf8` codec |
 
+## Local chunk caching
+
+By default, every array slice triggers an HTTP Range request. For repeated access to the same data (common in interactive analysis), you can enable a persistent local cache backed by SQLite:
+
+```python
+from zindi import LocalCache, open_rfs
+
+cache = LocalCache()  # persists to ~/.zindi/cache
+root = open_rfs("example.zindi.json", local_cache=cache)
+
+# First read fetches from remote; subsequent reads are served from disk
+data = root["units/spike_times"][:]
+```
+
+To prevent unbounded cache growth, set a size limit. Least-recently-accessed chunks are evicted when the limit is exceeded:
+
+```python
+cache = LocalCache(max_size_bytes=500_000_000)  # 500 MB cap
+```
+
 ## Architecture
 
 ```
