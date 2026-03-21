@@ -113,6 +113,14 @@ def _create_test_hdf5(path: str) -> None:
         g.create_dataset("refs_array", data=[target.ref, target.ref], dtype=h5py.ref_dtype)
         g.create_dataset("ref_scalar", data=target.ref, dtype=h5py.ref_dtype)
 
+        # Compound dataset with reference field
+        target2 = g["indices"]
+        cpd_ref_dtype = np.dtype([("id", "i4"), ("target", h5py.ref_dtype)])
+        cpd_ref_data = np.array(
+            [(1, target.ref), (2, target2.ref)], dtype=cpd_ref_dtype
+        )
+        g.create_dataset("compound_with_refs", data=cpd_ref_data)
+
 
 class TestBasicRoundtrip:
     """Test generating and reading back RFS."""
@@ -364,6 +372,23 @@ class TestBasicRoundtrip:
         meta_scalar = json.loads(self.rfs["refs"]["acquisition/ref_scalar/zarr.json"])
         assert meta_scalar["attributes"]["_DTYPE"] == "object_reference"
         assert meta_scalar["attributes"]["_SCALAR"] is True
+
+    def test_compound_with_references(self):
+        """Compound dataset with reference field round-trips correctly."""
+        root = open_rfs(self.rfs)
+        arr = root["acquisition/compound_with_refs"]
+        result = arr[:]
+        assert result.dtype.names == ("id", "target")
+        np.testing.assert_array_equal(result["id"], [1, 2])
+        # Reference fields should be resolved to path strings
+        assert str(result["target"][0]) == "/acquisition/timeseries"
+        assert str(result["target"][1]) == "/acquisition/indices"
+
+    def test_compound_with_references_metadata(self):
+        """Compound with refs has _REFERENCE_FIELDS attribute."""
+        meta = json.loads(self.rfs["refs"]["acquisition/compound_with_refs/zarr.json"])
+        assert meta["attributes"]["_REFERENCE_FIELDS"] == ["target"]
+        assert meta["data_type"]["name"] == "structured"
 
     def test_write_and_read_json(self):
         """RFS can be written to JSON and read back."""

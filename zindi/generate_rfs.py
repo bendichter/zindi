@@ -292,6 +292,13 @@ def _process_inline_dataset(
     if ds.dtype.kind == "V" and ds.dtype.fields is not None:
         shape = list(data.shape)
         dtype = data.dtype
+
+        # Check for reference fields — resolve to path strings
+        ref_fields = _get_reference_fields(dtype)
+        if ref_fields:
+            data, dtype = _resolve_compound_references(data, dtype, ref_fields, h5f)
+            attrs["_REFERENCE_FIELDS"] = ref_fields
+
         data_type = _compound_dtype_to_zarr_v3(dtype)
         fill_value = _encode_compound_fill_value(dtype)
 
@@ -476,7 +483,11 @@ def _should_inline(ds: h5py.Dataset) -> bool:
         # String/object data - always inline
         return True
     if ds.dtype.kind == "V" and ds.dtype.fields is not None:
-        # Compound type - inline small ones, use byte-range refs for large
+        # Compound with reference fields must always be inlined
+        # (HDF5 reference handles are opaque — can't use byte-range refs)
+        if _compound_has_references(ds.dtype):
+            return True
+        # Regular compound - inline small ones, use byte-range refs for large
         if ds.size < 1000:
             return True
         return False
@@ -519,6 +530,12 @@ def _compound_dtype_to_zarr_v3(dtype: np.dtype) -> dict:
                 "name": "null_terminated_bytes",
                 "configuration": {"length_bytes": field_dtype.itemsize},
             }
+        elif field_dtype.kind == "U":
+            # Fixed-length unicode (e.g. resolved reference paths)
+            zarr_type = {
+                "name": "fixed_length_utf32",
+                "configuration": {"length_bytes": field_dtype.itemsize},
+            }
         else:
             zarr_type = _numpy_dtype_to_zarr_v3(field_dtype)
         fields.append([field_name, zarr_type])
@@ -527,6 +544,69 @@ def _compound_dtype_to_zarr_v3(dtype: np.dtype) -> dict:
         "name": "structured",
         "configuration": {"fields": fields},
     }
+
+
+def _compound_has_references(dtype: np.dtype) -> bool:
+    """Check if a compound dtype has any reference fields."""
+    for field_name in dtype.names:
+        if h5py.check_dtype(ref=dtype[field_name]) == h5py.Reference:
+            return True
+    return False
+
+
+def _get_reference_fields(dtype: np.dtype) -> list[str]:
+    """Return names of reference fields in a compound dtype."""
+    return [
+        name for name in dtype.names
+        if h5py.check_dtype(ref=dtype[name]) == h5py.Reference
+    ]
+
+
+def _resolve_compound_references(
+    data: np.ndarray,
+    dtype: np.dtype,
+    ref_fields: list[str],
+    h5f: h5py.File,
+) -> tuple[np.ndarray, np.dtype]:
+    """Resolve reference fields in compound data to path strings.
+
+    Returns a new array with reference fields replaced by fixed-length
+    Unicode strings containing target paths, and the new dtype.
+    """
+    # First pass: resolve all references to find max path length per field
+    resolved: dict[str, list[str]] = {name: [] for name in ref_fields}
+    flat = data.ravel()
+    for i in range(len(flat)):
+        for name in ref_fields:
+            val = flat[i][name]
+            if isinstance(val, h5py.Reference):
+                resolved[name].append(h5f[val].name)
+            else:
+                resolved[name].append("")
+
+    # Build new dtype with string fields replacing reference fields
+    new_fields = []
+    for name in dtype.names:
+        if name in ref_fields:
+            max_len = max((len(s) for s in resolved[name]), default=1)
+            new_fields.append((name, f"U{max_len}"))
+        else:
+            new_fields.append((name, dtype[name]))
+    new_dtype = np.dtype(new_fields)
+
+    # Build new array
+    new_data = np.empty(data.shape, dtype=new_dtype)
+    new_flat = new_data.ravel()
+    for i in range(len(flat)):
+        vals = []
+        for name in dtype.names:
+            if name in ref_fields:
+                vals.append(resolved[name][i])
+            else:
+                vals.append(flat[i][name])
+        new_flat[i] = tuple(vals)
+
+    return new_data, new_dtype
 
 
 def _encode_compound_fill_value(dtype: np.dtype) -> str:

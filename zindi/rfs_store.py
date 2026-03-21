@@ -258,6 +258,10 @@ def _zarr_field_type_to_numpy(field_type: str | dict) -> str:
         if name == "null_terminated_bytes":
             length = field_type["configuration"]["length_bytes"]
             return f"S{length}"
+        if name == "fixed_length_utf32":
+            # length_bytes is total bytes; each UTF-32 char is 4 bytes
+            length = field_type["configuration"]["length_bytes"] // 4
+            return f"U{length}"
     raise ValueError(f"Unsupported zarr field type: {field_type}")
 
 
