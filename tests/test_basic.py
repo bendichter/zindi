@@ -70,6 +70,11 @@ def _create_test_hdf5(path: str) -> None:
         g.attrs["nan_value"] = float("nan")
         g.attrs["inf_value"] = float("inf")
 
+        # Object reference datasets
+        target = g["timeseries"]
+        g.create_dataset("refs_array", data=[target.ref, target.ref], dtype=h5py.ref_dtype)
+        g.create_dataset("ref_scalar", data=target.ref, dtype=h5py.ref_dtype)
+
 
 class TestBasicRoundtrip:
     """Test generating and reading back RFS."""
@@ -211,6 +216,38 @@ class TestBasicRoundtrip:
         arr = root["acquisition/mask"]
         result = arr[:]
         np.testing.assert_array_equal(result, [True, False, True])
+
+    def test_object_reference_array(self):
+        """Object reference array stores references as JSON strings."""
+        root = open_rfs(self.rfs)
+        arr = root["acquisition/refs_array"]
+        result = arr[:]
+        assert len(result) == 2
+        # Each element should be a JSON string containing _REFERENCE
+        for val in result:
+            parsed = json.loads(val)
+            assert "_REFERENCE" in parsed
+            assert parsed["_REFERENCE"]["source"] == "."
+            assert parsed["_REFERENCE"]["path"] == "/acquisition/timeseries"
+
+    def test_object_reference_scalar(self):
+        """Scalar object reference stores reference as JSON string."""
+        root = open_rfs(self.rfs)
+        arr = root["acquisition/ref_scalar"]
+        assert arr.shape == (1,)
+        parsed = json.loads(str(arr[0]))
+        assert "_REFERENCE" in parsed
+        assert parsed["_REFERENCE"]["path"] == "/acquisition/timeseries"
+
+    def test_object_reference_dtype_attr(self):
+        """Object reference datasets have _DTYPE in zarr.json metadata."""
+        meta = json.loads(self.rfs["refs"]["acquisition/refs_array/zarr.json"])
+        assert meta["attributes"]["_DTYPE"] == "object_reference"
+        assert meta["data_type"] == "string"
+
+        meta_scalar = json.loads(self.rfs["refs"]["acquisition/ref_scalar/zarr.json"])
+        assert meta_scalar["attributes"]["_DTYPE"] == "object_reference"
+        assert meta_scalar["attributes"]["_SCALAR"] is True
 
     def test_write_and_read_json(self):
         """RFS can be written to JSON and read back."""
