@@ -167,12 +167,14 @@ class RfsStore(Store):
 
             # Store in local cache
             if self._local_cache is not None and is_url:
+                from .local_cache import ChunkTooLargeError
+
                 try:
                     self._local_cache.put_remote_chunk(
                         url=url_or_path, offset=offset, size=length, data=data
                     )
-                except Exception:
-                    pass  # silently skip cache failures
+                except ChunkTooLargeError:
+                    pass  # chunk exceeds SQLite blob limit, skip caching
 
             # Pad if this is a final chunk in a contiguous dataset
             padded_size = self._get_padded_size(key, data)
