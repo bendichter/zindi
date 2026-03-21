@@ -174,9 +174,8 @@ def _process_dataset(
 
     # Zarr v3 data_type
     if dtype.kind == "V" and dtype.fields is not None:
-        # Compound dtype
-        data_type, compound_dtype_attr = _compound_dtype_to_zarr_v3(dtype)
-        attrs["_COMPOUND_DTYPE"] = compound_dtype_attr
+        # Compound dtype — zarr v3's structured data_type carries field info natively
+        data_type = _compound_dtype_to_zarr_v3(dtype)
         fill_value = _encode_compound_fill_value(dtype)
     else:
         data_type = _numpy_dtype_to_zarr_v3(dtype)
@@ -293,8 +292,7 @@ def _process_inline_dataset(
     if ds.dtype.kind == "V" and ds.dtype.fields is not None:
         shape = list(data.shape)
         dtype = data.dtype
-        data_type, compound_dtype_attr = _compound_dtype_to_zarr_v3(dtype)
-        attrs["_COMPOUND_DTYPE"] = compound_dtype_attr
+        data_type = _compound_dtype_to_zarr_v3(dtype)
         fill_value = _encode_compound_fill_value(dtype)
 
         codec_pipeline = [
@@ -511,37 +509,24 @@ def _numpy_dtype_to_zarr_v3(dtype: np.dtype) -> str:
     return result
 
 
-def _compound_dtype_to_zarr_v3(dtype: np.dtype) -> tuple[dict, list]:
-    """Convert a numpy structured dtype to zarr v3 structured data_type and _COMPOUND_DTYPE attr.
-
-    Returns
-    -------
-    (data_type_dict, compound_dtype_attr)
-        data_type_dict: zarr v3 data_type for zarr.json
-        compound_dtype_attr: list of {"name", "dtype"} dicts for _COMPOUND_DTYPE attribute
-    """
-    fields_zarr = []
-    fields_attr = []
+def _compound_dtype_to_zarr_v3(dtype: np.dtype) -> dict:
+    """Convert a numpy structured dtype to a zarr v3 structured data_type dict."""
+    fields = []
     for field_name in dtype.names:
         field_dtype = dtype[field_name]
         if field_dtype.kind == "S":
-            # Fixed-length byte string
             zarr_type = {
                 "name": "null_terminated_bytes",
                 "configuration": {"length_bytes": field_dtype.itemsize},
             }
-            attr_type = str(field_dtype)  # e.g. "|S10"
         else:
             zarr_type = _numpy_dtype_to_zarr_v3(field_dtype)
-            attr_type = zarr_type
-        fields_zarr.append([field_name, zarr_type])
-        fields_attr.append({"name": field_name, "dtype": attr_type})
+        fields.append([field_name, zarr_type])
 
-    data_type_dict = {
+    return {
         "name": "structured",
-        "configuration": {"fields": fields_zarr},
+        "configuration": {"fields": fields},
     }
-    return data_type_dict, fields_attr
 
 
 def _encode_compound_fill_value(dtype: np.dtype) -> str:

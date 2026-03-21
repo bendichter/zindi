@@ -303,15 +303,10 @@ class TestBasicRoundtrip:
         result = arr[:]
         np.testing.assert_array_equal(result, expected)
 
-    def test_compound_dtype_attr(self):
-        """Compound datasets have _COMPOUND_DTYPE in zarr.json metadata."""
+    def test_compound_structured_data_type(self):
+        """Compound datasets use zarr v3 structured data_type (no _COMPOUND_DTYPE)."""
         meta = json.loads(self.rfs["refs"]["acquisition/compound_small/zarr.json"])
-        cpd_attr = meta["attributes"]["_COMPOUND_DTYPE"]
-        assert cpd_attr == [
-            {"name": "x", "dtype": "int32"},
-            {"name": "y", "dtype": "float64"},
-        ]
-        # data_type should be structured
+        assert "_COMPOUND_DTYPE" not in meta["attributes"]
         assert meta["data_type"]["name"] == "structured"
         assert meta["data_type"]["configuration"]["fields"] == [
             ["x", "int32"],
