@@ -109,6 +109,8 @@ class RfsStore(Store):
                 yield key
 
     async def list_dir(self, prefix: str) -> AsyncIterator[str]:
+        if prefix and not prefix.endswith("/"):
+            prefix = prefix + "/"
         prefix_len = len(prefix)
         seen: set[str] = set()
         for key in self.rfs["refs"]:
