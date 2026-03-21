@@ -19,6 +19,7 @@ import base64
 import json
 import time
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -70,6 +71,7 @@ class RfsStore(Store):
         self._local_cache = local_cache
         self._merge_gap = merge_gap
         self._max_merge_size = max_merge_size
+        self._executor = ThreadPoolExecutor(max_workers=32)
         self._is_open = True
 
     # -- Abstract method implementations --
@@ -97,7 +99,8 @@ class RfsStore(Store):
     ) -> Buffer | None:
         if prototype is None:
             prototype = default_buffer_prototype()
-        data = await asyncio.to_thread(self._get_bytes, key)
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(self._executor, self._get_bytes, key)
         if data is None:
             return None
         if byte_range is not None:
@@ -109,6 +112,7 @@ class RfsStore(Store):
         prototype: BufferPrototype,
         key_ranges: Any,
     ) -> list[Buffer | None]:
+        loop = asyncio.get_running_loop()
         # Separate remote byte-range refs (mergeable) from everything else
         items = list(key_ranges)
         results: list[Buffer | None] = [None] * len(items)
@@ -146,7 +150,9 @@ class RfsStore(Store):
             fetch_tasks = []
             for url, refs_for_url in url_groups.items():
                 fetch_tasks.append(
-                    asyncio.to_thread(self._fetch_merged_ranges, url, refs_for_url, prototype)
+                    loop.run_in_executor(
+                        self._executor, self._fetch_merged_ranges, url, refs_for_url, prototype
+                    )
                 )
             fetched_groups = await asyncio.gather(*fetch_tasks)
             for group_results in fetched_groups:
