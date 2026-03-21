@@ -449,3 +449,10 @@ class TestBasicRoundtrip:
 
         assert os.path.isdir(parquet_dir)
         assert os.path.exists(f"{parquet_dir}/chunk_refs.parquet")
+
+    def test_write_rfs_invalid_format(self):
+        """Invalid format raises ValueError."""
+        from zindi.generate_rfs import write_rfs
+
+        with pytest.raises(ValueError, match="Invalid format"):
+            write_rfs(self.rfs, f"{self.tmpdir}/bad", format="parqet")
