@@ -1,0 +1,131 @@
+# Zindi
+
+Represent remote HDF5 NWB files as Zarr v3 via JSON reference file systems.
+
+## What it does
+
+Zindi reads the metadata and chunk layout of an HDF5 file (local or remote) and produces a small JSON file that describes the same data as a Zarr v3 store. The JSON contains:
+
+- **Zarr v3 metadata** (`zarr.json` entries for every group and array)
+- **Chunk references** pointing to byte ranges in the original HDF5 file (`[url, offset, size]`)
+- **Inline data** for small datasets (base64-encoded)
+
+When you open this JSON, Zindi provides a zarr v3 `Store` that fetches chunks on demand from the remote HDF5 file using HTTP Range requests. No data is copied — the original file is the source of truth.
+
+## How it relates to Lindi
+
+[Lindi](https://github.com/NeurodataWithoutBorders/lindi) does something similar but targets Zarr v2 and creates an h5py-like shim object for use with `pynwb.NWBHDF5IO`.
+
+Zindi instead produces a proper Zarr v3 store, following the [unified convention](https://github.com/NeurodataWithoutBorders/lindi/issues/125) that aligns Lindi and hdmf-zarr. The goal is to read NWB files via `pynwb.NWBZarrIO` (once hdmf-zarr completes its [Zarr v3 migration](https://github.com/hdmf-dev/hdmf-zarr/issues/335)), eliminating the h5py shim layer.
+
+## Installation
+
+```bash
+pip install -e .
+```
+
+## Quick start
+
+### Generate a reference file system from a remote NWB file
+
+```python
+from zindi import generate_rfs, write_rfs
+
+url = "https://api.dandiarchive.org/api/assets/6e7e9b91-0d66-45af-b646-dfb11e4d9967/download/"
+
+rfs = generate_rfs(url)
+write_rfs(rfs, "example.zindi.json")
+```
+
+Just pass the URL — Zindi handles remote file access internally.
+
+### Load the JSON and read data as Zarr v3
+
+```python
+from zindi import open_rfs
+
+root = open_rfs("example.zindi.json")
+
+# Browse the hierarchy
+print(root.attrs["neurodata_type"])  # 'NWBFile'
+
+# Read data (fetched from remote HDF5 via byte-range requests)
+spike_times = root["units/spike_times"][:]
+print(spike_times.shape)  # (359781,)
+```
+
+### Generate from a local HDF5 file
+
+If you have a local copy but want chunk references to point to a remote URL:
+
+```python
+from zindi import generate_rfs, write_rfs
+
+rfs = generate_rfs(
+    "https://example.com/data.nwb",
+    local_hdf5_path="/path/to/local/data.nwb",
+)
+write_rfs(rfs, "data.zindi.json")
+```
+
+## DANDI support
+
+Zindi handles DANDI API URLs automatically. The DANDI URL (which returns a 302 redirect to a presigned S3 URL) is resolved transparently, with the presigned URL cached for 10 minutes.
+
+For embargoed datasets, set the appropriate environment variable:
+
+```bash
+export DANDI_API_KEY=your_token_here
+# or for staging:
+export DANDI_STAGING_API_KEY=your_token_here
+```
+
+## Unified convention
+
+The generated JSON follows the [unified Zarr v3 convention](https://github.com/hdmf-dev/hdmf-zarr/issues/335) for representing HDF5/NWB concepts in Zarr:
+
+| Feature | Convention |
+|---------|-----------|
+| Groups | `zarr.json` with `node_type: "group"` |
+| Arrays | `zarr.json` with `node_type: "array"`, codecs pipeline |
+| Scalars | `_SCALAR: true` attribute, stored as shape `[1]` |
+| Soft links | `_LINKS` list on parent group: `[{"name", "source", "path"}]` |
+| References in attrs | `{"_REFERENCE": {"source": ".", "path": "/target"}}` |
+| NaN/Inf in attrs | Encoded as `"NaN"`, `"Infinity"`, `"-Infinity"` strings |
+| Strings | `data_type: "string"` with `vlen-utf8` codec |
+
+## Architecture
+
+```
+zindi/
+├── generate_rfs.py          # HDF5 → Zarr v3 reference file system
+├── open_rfs.py              # Open RFS as zarr.Group
+├── rfs_store.py             # Zarr v3 Store backed by reference file system
+├── remfile.py               # File-like HTTP reader optimized for h5py
+├── h5_filters_to_codecs.py  # HDF5 filters → Zarr v3 codec pipeline
+├── h5_chunk_utils.py        # HDF5 chunk byte range utilities
+├── attr_conversion.py       # HDF5 attrs → JSON-serializable values
+└── url_resolver.py          # DANDI URL resolution with caching
+```
+
+**Data flow:**
+
+```
+Remote HDF5 file
+    ↓ (h5py + Remfile: read metadata and chunk layout)
+JSON reference file system (.zindi.json)
+    ↓ (RfsStore: zarr v3 Store implementation)
+zarr.Group (read-only, chunks fetched on demand)
+    ↓ (future: NWBZarrIO)
+pynwb NWBFile
+```
+
+## Current limitations
+
+This is v0.1 — the following are not yet implemented:
+
+- Compound dtypes (`_COMPOUND_DTYPE`)
+- Object references in datasets (`_DTYPE = "object"`)
+- External array links (`_EXTERNAL_ARRAY_LINK`)
+- Integration with `NWBZarrIO` (requires hdmf-zarr Zarr v3 migration)
+- Local chunk caching
