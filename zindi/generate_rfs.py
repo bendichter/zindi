@@ -19,7 +19,7 @@ import h5py
 import numpy as np
 from tqdm import tqdm
 
-from .attr_conversion import _h5_ref_to_zarr_attr, h5_attr_to_zarr
+from .attr_conversion import h5_attr_to_zarr
 from .h5_chunk_utils import (
     apply_to_all_chunk_info,
     get_byte_range_for_contiguous_dataset,
@@ -218,14 +218,13 @@ def _process_inline_dataset(
     if is_scalar:
         shape = [1]
         if isinstance(data, h5py.Reference):
-            # Scalar object reference
+            # Scalar object reference — store target path as plain string
             attrs["_SCALAR"] = True
             attrs["_DTYPE"] = "object_reference"
-            ref_dict = _h5_ref_to_zarr_attr(data, h5f=h5f)
-            ref_str = json.dumps(ref_dict)
+            target = h5f[data]
             array_meta = _make_string_array_meta(shape, attrs)
             refs[f"{path}/zarr.json"] = json.dumps(array_meta, separators=(",", ":"))
-            chunk_bytes = _encode_vlen_utf8([ref_str])
+            chunk_bytes = _encode_vlen_utf8([target.name])
             refs[f"{path}/c/0"] = "base64:" + base64.b64encode(chunk_bytes).decode("ascii")
             return
         if isinstance(data, bytes):
@@ -242,23 +241,23 @@ def _process_inline_dataset(
             data = np.array([data])
     else:
         if h5py.check_dtype(ref=ds.dtype) == h5py.Reference:
-            # Object reference array
+            # Object reference array — store target paths as plain strings
             data = ds[...]
-            ref_strs = []
+            path_strs = []
             for item in np.nditer(data, flags=["refs_ok"]):
                 val = item.item()
                 if isinstance(val, h5py.Reference):
-                    ref_dict = _h5_ref_to_zarr_attr(val, h5f=h5f)
-                    ref_strs.append(json.dumps(ref_dict))
+                    target = h5f[val]
+                    path_strs.append(target.name)
                 else:
-                    ref_strs.append("")
+                    path_strs.append("")
 
             shape = list(ds.shape)
             attrs["_DTYPE"] = "object_reference"
             array_meta = _make_string_array_meta(shape, attrs)
             refs[f"{path}/zarr.json"] = json.dumps(array_meta, separators=(",", ":"))
 
-            chunk_bytes = _encode_vlen_utf8(ref_strs)
+            chunk_bytes = _encode_vlen_utf8(path_strs)
             chunk_key = "c/" + "/".join(["0"] * max(ds.ndim, 1))
             refs[f"{path}/{chunk_key}"] = (
                 "base64:" + base64.b64encode(chunk_bytes).decode("ascii")

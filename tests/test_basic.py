@@ -218,26 +218,20 @@ class TestBasicRoundtrip:
         np.testing.assert_array_equal(result, [True, False, True])
 
     def test_object_reference_array(self):
-        """Object reference array stores references as JSON strings."""
+        """Object reference array stores target paths as plain strings."""
         root = open_rfs(self.rfs)
         arr = root["acquisition/refs_array"]
         result = arr[:]
         assert len(result) == 2
-        # Each element should be a JSON string containing _REFERENCE
         for val in result:
-            parsed = json.loads(val)
-            assert "_REFERENCE" in parsed
-            assert parsed["_REFERENCE"]["source"] == "."
-            assert parsed["_REFERENCE"]["path"] == "/acquisition/timeseries"
+            assert str(val) == "/acquisition/timeseries"
 
     def test_object_reference_scalar(self):
-        """Scalar object reference stores reference as JSON string."""
+        """Scalar object reference stores target path as plain string."""
         root = open_rfs(self.rfs)
         arr = root["acquisition/ref_scalar"]
         assert arr.shape == (1,)
-        parsed = json.loads(str(arr[0]))
-        assert "_REFERENCE" in parsed
-        assert parsed["_REFERENCE"]["path"] == "/acquisition/timeseries"
+        assert str(arr[0]) == "/acquisition/timeseries"
 
     def test_object_reference_dtype_attr(self):
         """Object reference datasets have _DTYPE in zarr.json metadata."""
