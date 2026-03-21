@@ -78,10 +78,84 @@ def generate_rfs(
     return rfs
 
 
-def write_rfs(rfs: dict, output_path: str) -> None:
-    """Write a reference file system dict to a JSON file."""
-    with open(output_path, "w") as f:
-        json.dump(rfs, f, indent=2, sort_keys=True)
+def write_rfs(
+    rfs: dict,
+    output_path: str,
+    *,
+    format: str = "auto",
+    inline_threshold: int = 10_000,
+) -> None:
+    """Write a reference file system to JSON or parquet directory.
+
+    Parameters
+    ----------
+    rfs : dict
+        Reference file system dict from ``generate_rfs``.
+    output_path : str
+        Output file path (JSON) or directory path (parquet).
+    format : str
+        ``"json"`` for JSON, ``"parquet"`` for parquet directory,
+        ``"auto"`` to choose based on chunk ref count vs inline_threshold.
+    inline_threshold : int
+        Maximum number of chunk references to keep in JSON before
+        switching to parquet (only used when format is ``"auto"``).
+    """
+    if format == "auto":
+        chunk_count = sum(
+            1 for v in rfs["refs"].values()
+            if isinstance(v, list) and len(v) == 3
+        )
+        format = "parquet" if chunk_count > inline_threshold else "json"
+
+    if format == "parquet":
+        _write_rfs_parquet(rfs, output_path)
+    else:
+        with open(output_path, "w") as f:
+            json.dump(rfs, f, indent=2, sort_keys=True)
+
+
+def _write_rfs_parquet(rfs: dict, output_dir: str) -> None:
+    """Write an RFS as a parquet directory (metadata.json + chunk_refs.parquet)."""
+    import os
+
+    import pandas as pd
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    metadata_refs: dict[str, Any] = {}
+    chunk_rows: list[dict] = []
+    for key, val in rfs["refs"].items():
+        if isinstance(val, list) and len(val) == 3:
+            chunk_rows.append({
+                "key": key,
+                "path": str(val[0]),
+                "offset": val[1],
+                "size": val[2],
+            })
+        else:
+            metadata_refs[key] = val
+
+    # Write metadata JSON
+    metadata: dict[str, Any] = {
+        "refs": metadata_refs,
+        "version": rfs.get("version", 1),
+    }
+    if "templates" in rfs:
+        metadata["templates"] = rfs["templates"]
+    with open(os.path.join(output_dir, "metadata.json"), "w") as f:
+        json.dump(metadata, f, separators=(",", ":"))
+
+    # Write chunk refs parquet
+    if chunk_rows:
+        df = pd.DataFrame(chunk_rows)
+        df["offset"] = df["offset"].astype("int64")
+        df["size"] = df["size"].astype("int64")
+        df.to_parquet(
+            os.path.join(output_dir, "chunk_refs.parquet"),
+            engine="pyarrow",
+            compression="zstd",
+            index=False,
+        )
 
 
 # ---------------------------------------------------------------------------
