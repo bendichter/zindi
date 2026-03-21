@@ -114,6 +114,21 @@ To prevent unbounded cache growth, set a size limit. Least-recently-accessed chu
 cache = LocalCache(max_size_bytes=500_000_000)  # 500 MB cap
 ```
 
+## Request merging
+
+When reading a multi-chunk slice, zindi automatically merges nearby HTTP Range requests into fewer, larger fetches. For example, reading 10 contiguous chunks from a remote file may result in a single HTTP request instead of 10.
+
+Two parameters control the merging behavior:
+
+- `merge_gap`: maximum gap in bytes between two ranges to merge (default 256 KB)
+- `max_merge_size`: maximum size of a single merged request (default 50 MB)
+
+```python
+root = open_rfs("example.zindi.json", merge_gap=1_000_000, max_merge_size=100_000_000)
+```
+
+Set `merge_gap=0` to disable merging and fetch every chunk individually.
+
 ## Architecture
 
 ```
