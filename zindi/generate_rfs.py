@@ -100,6 +100,10 @@ def write_rfs(
         Maximum number of chunk references to keep in JSON before
         switching to parquet (only used when format is ``"auto"``).
     """
+    valid_formats = {"auto", "json", "parquet"}
+    if format not in valid_formats:
+        raise ValueError(f"Invalid format: {format!r}. Expected one of {sorted(valid_formats)}")
+
     if format == "auto":
         chunk_count = sum(
             1 for v in rfs["refs"].values()
