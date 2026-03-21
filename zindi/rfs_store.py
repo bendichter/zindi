@@ -36,13 +36,16 @@ class RfsStore(Store):
     ----------
     rfs : dict
         Reference file system dict with "refs" key, and optional "templates".
+    local_cache : LocalCache or None
+        Optional local cache for persisting remote chunk data on disk.
     """
 
-    def __init__(self, rfs: dict) -> None:
+    def __init__(self, rfs: dict, *, local_cache: Any = None) -> None:
         super().__init__(read_only=True)
         if "refs" not in rfs:
             raise ValueError("rfs must contain a 'refs' key")
         self.rfs = rfs
+        self._local_cache = local_cache
         self._is_open = True
 
     # -- Abstract method implementations --
@@ -147,7 +150,29 @@ class RfsStore(Store):
                 for tkey, tval in self.rfs["templates"].items():
                     url_or_path = url_or_path.replace("{{" + tkey + "}}", tval)
 
+            is_url = url_or_path.startswith("http://") or url_or_path.startswith("https://")
+
+            # Check local cache for remote chunks
+            if self._local_cache is not None and is_url:
+                cached = self._local_cache.get_remote_chunk(
+                    url=url_or_path, offset=offset, size=length
+                )
+                if cached is not None:
+                    padded_size = self._get_padded_size(key, cached)
+                    if padded_size is not None:
+                        cached = cached + b"\0" * (padded_size - len(cached))
+                    return cached
+
             data = _read_bytes_from_url_or_path(url_or_path, offset, length)
+
+            # Store in local cache
+            if self._local_cache is not None and is_url:
+                try:
+                    self._local_cache.put_remote_chunk(
+                        url=url_or_path, offset=offset, size=length, data=data
+                    )
+                except Exception:
+                    pass  # silently skip cache failures
 
             # Pad if this is a final chunk in a contiguous dataset
             padded_size = self._get_padded_size(key, data)

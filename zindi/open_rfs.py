@@ -14,7 +14,7 @@ import zarr
 from .rfs_store import RfsStore
 
 
-def open_rfs(rfs: dict | str) -> zarr.Group:
+def open_rfs(rfs: dict | str, *, local_cache: Any = None) -> zarr.Group:
     """Open a reference file system as a zarr v3 Group.
 
     Parameters
@@ -22,6 +22,8 @@ def open_rfs(rfs: dict | str) -> zarr.Group:
     rfs : dict or str
         Either an RFS dict (with "refs" and "version" keys), or a path
         to a JSON file containing one.
+    local_cache : LocalCache or None
+        Optional local cache for persisting remote chunk data on disk.
 
     Returns
     -------
@@ -34,5 +36,5 @@ def open_rfs(rfs: dict | str) -> zarr.Group:
 
     assert isinstance(rfs, dict)
 
-    store = RfsStore(rfs)
+    store = RfsStore(rfs, local_cache=local_cache)
     return zarr.open_group(store, mode="r", zarr_format=3)
