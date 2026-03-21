@@ -70,6 +70,44 @@ def _create_test_hdf5(path: str) -> None:
         g.attrs["nan_value"] = float("nan")
         g.attrs["inf_value"] = float("inf")
 
+        # Compound datasets
+        cpd_dtype = np.dtype([("x", "i4"), ("y", "f8")])
+
+        # Small compound (will be inlined)
+        cpd_small = np.array([(1, 2.5), (3, 4.5), (5, 6.5)], dtype=cpd_dtype)
+        g.create_dataset("compound_small", data=cpd_small)
+
+        # Large compound - chunked (byte-range refs)
+        cpd_large = np.array([(i, float(i) * 0.5) for i in range(2000)], dtype=cpd_dtype)
+        g.create_dataset("compound_chunked", data=cpd_large, chunks=(500,))
+
+        # Large compound - compressed
+        g.create_dataset(
+            "compound_compressed",
+            data=cpd_large,
+            chunks=(500,),
+            compression="gzip",
+            compression_opts=4,
+        )
+
+        # Large compound - contiguous (no chunking)
+        g.create_dataset("compound_contiguous", data=cpd_large)
+
+        # Compound with mixed types: int, float, and fixed-length byte string
+        cpd_mixed_dtype = np.dtype([("id", "i4"), ("value", "f8"), ("label", "S10")])
+        cpd_mixed = np.array(
+            [(1, 2.5, b"hello"), (3, 4.5, b"world"), (5, 6.5, b"test")],
+            dtype=cpd_mixed_dtype,
+        )
+        g.create_dataset("compound_mixed", data=cpd_mixed)
+
+        # Large compound with mixed types - chunked
+        cpd_mixed_large = np.array(
+            [(i, float(i) * 0.1, f"item{i:04d}".encode()) for i in range(2000)],
+            dtype=cpd_mixed_dtype,
+        )
+        g.create_dataset("compound_mixed_chunked", data=cpd_mixed_large, chunks=(500,))
+
 
 class TestBasicRoundtrip:
     """Test generating and reading back RFS."""
@@ -211,6 +249,95 @@ class TestBasicRoundtrip:
         arr = root["acquisition/mask"]
         result = arr[:]
         np.testing.assert_array_equal(result, [True, False, True])
+
+    def test_compound_inline(self):
+        """Small compound dataset is inlined and round-trips correctly."""
+        root = open_rfs(self.rfs)
+        arr = root["acquisition/compound_small"]
+
+        with h5py.File(self.h5_path, "r") as f:
+            expected = f["acquisition/compound_small"][:]
+
+        result = arr[:]
+        np.testing.assert_array_equal(result, expected)
+        assert result.dtype.names == ("x", "y")
+        np.testing.assert_array_equal(result["x"], [1, 3, 5])
+        np.testing.assert_array_equal(result["y"], [2.5, 4.5, 6.5])
+
+    def test_compound_chunked(self):
+        """Large chunked compound dataset round-trips via byte-range refs."""
+        root = open_rfs(self.rfs)
+        arr = root["acquisition/compound_chunked"]
+
+        with h5py.File(self.h5_path, "r") as f:
+            expected = f["acquisition/compound_chunked"][:]
+
+        result = arr[:]
+        np.testing.assert_array_equal(result, expected)
+        assert result.dtype.names == ("x", "y")
+
+    def test_compound_compressed(self):
+        """Compressed compound dataset round-trips correctly."""
+        root = open_rfs(self.rfs)
+        arr = root["acquisition/compound_compressed"]
+
+        with h5py.File(self.h5_path, "r") as f:
+            expected = f["acquisition/compound_compressed"][:]
+
+        result = arr[:]
+        np.testing.assert_array_equal(result, expected)
+
+    def test_compound_contiguous(self):
+        """Contiguous compound dataset round-trips correctly."""
+        root = open_rfs(self.rfs)
+        arr = root["acquisition/compound_contiguous"]
+
+        with h5py.File(self.h5_path, "r") as f:
+            expected = f["acquisition/compound_contiguous"][:]
+
+        result = arr[:]
+        np.testing.assert_array_equal(result, expected)
+
+    def test_compound_dtype_attr(self):
+        """Compound datasets have _COMPOUND_DTYPE in zarr.json metadata."""
+        meta = json.loads(self.rfs["refs"]["acquisition/compound_small/zarr.json"])
+        cpd_attr = meta["attributes"]["_COMPOUND_DTYPE"]
+        assert cpd_attr == [
+            {"name": "x", "dtype": "int32"},
+            {"name": "y", "dtype": "float64"},
+        ]
+        # data_type should be structured
+        assert meta["data_type"]["name"] == "structured"
+        assert meta["data_type"]["configuration"]["fields"] == [
+            ["x", "int32"],
+            ["y", "float64"],
+        ]
+
+    def test_compound_mixed_inline(self):
+        """Compound with int, float, and fixed-length string round-trips (inlined)."""
+        root = open_rfs(self.rfs)
+        arr = root["acquisition/compound_mixed"]
+
+        with h5py.File(self.h5_path, "r") as f:
+            expected = f["acquisition/compound_mixed"][:]
+
+        result = arr[:]
+        np.testing.assert_array_equal(result, expected)
+        assert result.dtype.names == ("id", "value", "label")
+        np.testing.assert_array_equal(result["id"], [1, 3, 5])
+        np.testing.assert_array_equal(result["label"], [b"hello", b"world", b"test"])
+
+    def test_compound_mixed_chunked(self):
+        """Large compound with int, float, and string round-trips via byte-range refs."""
+        root = open_rfs(self.rfs)
+        arr = root["acquisition/compound_mixed_chunked"]
+
+        with h5py.File(self.h5_path, "r") as f:
+            expected = f["acquisition/compound_mixed_chunked"][:]
+
+        result = arr[:]
+        np.testing.assert_array_equal(result, expected)
+        assert result.dtype.names == ("id", "value", "label")
 
     def test_write_and_read_json(self):
         """RFS can be written to JSON and read back."""

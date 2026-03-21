@@ -200,8 +200,19 @@ class RfsStore(Store):
         if chunk_shape is None or data_type is None:
             return None
 
-        dtype = np.dtype(data_type)
-        if dtype.kind not in ("i", "u", "f"):
+        if isinstance(data_type, dict):
+            if data_type.get("name") == "structured":
+                fields = data_type["configuration"]["fields"]
+                dtype = np.dtype([
+                    (f[0], _zarr_field_type_to_numpy(f[1])) for f in fields
+                ])
+            else:
+                return None
+        elif isinstance(data_type, str):
+            dtype = np.dtype(data_type)
+        else:
+            return None
+        if dtype.kind not in ("i", "u", "f", "V"):
             return None
 
         expected_size = int(np.prod(chunk_shape)) * dtype.itemsize
@@ -209,6 +220,18 @@ class RfsStore(Store):
             return expected_size
 
         return None
+
+
+def _zarr_field_type_to_numpy(field_type: str | dict) -> str:
+    """Convert a zarr v3 field type to a numpy dtype string."""
+    if isinstance(field_type, str):
+        return field_type
+    if isinstance(field_type, dict):
+        name = field_type.get("name")
+        if name == "null_terminated_bytes":
+            length = field_type["configuration"]["length_bytes"]
+            return f"S{length}"
+    raise ValueError(f"Unsupported zarr field type: {field_type}")
 
 
 def _read_bytes_from_url_or_path(url_or_path: str, offset: int, length: int) -> bytes:
