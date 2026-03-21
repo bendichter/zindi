@@ -85,10 +85,9 @@ class RfsStore(Store):
         prototype: BufferPrototype,
         key_ranges: Any,
     ) -> list[Buffer | None]:
-        results = []
-        for key, byte_range in key_ranges:
-            results.append(await self.get(key, prototype, byte_range))
-        return results
+        return list(await asyncio.gather(
+            *(self.get(key, prototype, byte_range) for key, byte_range in key_ranges)
+        ))
 
     async def exists(self, key: str) -> bool:
         return key in self.rfs["refs"]
