@@ -40,12 +40,36 @@ class RfsStore(Store):
         Optional local cache for persisting remote chunk data on disk.
     """
 
-    def __init__(self, rfs: dict, *, local_cache: Any = None) -> None:
+    def __init__(
+        self,
+        rfs: dict,
+        *,
+        local_cache: Any = None,
+        merge_gap: int = 256 * 1024,
+        max_merge_size: int = 50 * 1024 * 1024,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        rfs : dict
+            Reference file system dict with "refs" key, and optional "templates".
+        local_cache : LocalCache or None
+            Optional local cache for persisting remote chunk data on disk.
+        merge_gap : int
+            Maximum gap in bytes between two ranges before they are fetched
+            separately. Ranges within this distance are merged into a single
+            HTTP request. Default 256 KB.
+        max_merge_size : int
+            Maximum size in bytes for a single merged HTTP request. Merged
+            ranges that would exceed this are split. Default 50 MB.
+        """
         super().__init__(read_only=True)
         if "refs" not in rfs:
             raise ValueError("rfs must contain a 'refs' key")
         self.rfs = rfs
         self._local_cache = local_cache
+        self._merge_gap = merge_gap
+        self._max_merge_size = max_merge_size
         self._is_open = True
 
     # -- Abstract method implementations --
@@ -85,9 +109,127 @@ class RfsStore(Store):
         prototype: BufferPrototype,
         key_ranges: Any,
     ) -> list[Buffer | None]:
-        return list(await asyncio.gather(
-            *(self.get(key, prototype, byte_range) for key, byte_range in key_ranges)
-        ))
+        # Separate remote byte-range refs (mergeable) from everything else
+        items = list(key_ranges)
+        results: list[Buffer | None] = [None] * len(items)
+        non_remote_indices = []
+        # Group remote refs by resolved URL for merging
+        url_groups: dict[str, list[tuple[int, int, int, str]]] = {}  # url -> [(item_idx, offset, length, key)]
+
+        for i, (key, byte_range) in enumerate(items):
+            if byte_range is not None or key not in self.rfs["refs"]:
+                non_remote_indices.append(i)
+                continue
+            ref = self.rfs["refs"][key]
+            if not (isinstance(ref, list) and len(ref) == 3):
+                non_remote_indices.append(i)
+                continue
+            url_or_path = ref[0]
+            if "{{" in url_or_path and "}}" in url_or_path and "templates" in self.rfs:
+                for tkey, tval in self.rfs["templates"].items():
+                    url_or_path = url_or_path.replace("{{" + tkey + "}}", tval)
+            if not (url_or_path.startswith("http://") or url_or_path.startswith("https://")):
+                non_remote_indices.append(i)
+                continue
+            url_groups.setdefault(url_or_path, []).append((i, ref[1], ref[2], key))
+
+        # Fetch non-remote items individually (inline data, local files, etc.)
+        if non_remote_indices:
+            fetched = await asyncio.gather(
+                *(self.get(items[i][0], prototype, items[i][1]) for i in non_remote_indices)
+            )
+            for idx, buf in zip(non_remote_indices, fetched):
+                results[idx] = buf
+
+        # For each URL, merge nearby ranges and fetch
+        if url_groups:
+            fetch_tasks = []
+            for url, refs_for_url in url_groups.items():
+                fetch_tasks.append(
+                    asyncio.to_thread(self._fetch_merged_ranges, url, refs_for_url, prototype)
+                )
+            fetched_groups = await asyncio.gather(*fetch_tasks)
+            for group_results in fetched_groups:
+                for item_idx, buf in group_results:
+                    results[item_idx] = buf
+
+        return results
+
+    def _fetch_merged_ranges(
+        self,
+        url: str,
+        refs: list[tuple[int, int, int, str]],  # (item_idx, offset, length, key)
+        prototype: BufferPrototype,
+    ) -> list[tuple[int, Buffer | None]]:
+        """Fetch byte ranges from a single URL, merging nearby ranges."""
+        # Sort by offset
+        sorted_refs = sorted(refs, key=lambda r: r[1])
+
+        # Build merged ranges, respecting merge_gap and max_merge_size
+        merged: list[tuple[int, int, list[tuple[int, int, int, str]]]] = []  # (start, end, refs)
+        for ref in sorted_refs:
+            item_idx, offset, length, key = ref
+            end = offset + length
+            if merged:
+                new_end = max(merged[-1][1], end)
+                gap_ok = offset <= merged[-1][1] + self._merge_gap
+                size_ok = new_end - merged[-1][0] <= self._max_merge_size
+                if gap_ok and size_ok:
+                    merged[-1] = (merged[-1][0], new_end, merged[-1][2] + [ref])
+                    continue
+            merged.append((offset, end, [ref]))
+
+        # Fetch each merged range and split
+        results: list[tuple[int, Buffer | None]] = []
+        for start, end, group_refs in merged:
+            # Check cache for individual chunks first
+            uncached: list[tuple[int, int, int, str]] = []
+            for item_idx, offset, length, key in group_refs:
+                cached_data = None
+                if self._local_cache is not None:
+                    cached_data = self._local_cache.get_remote_chunk(
+                        url=url, offset=offset, size=length
+                    )
+                if cached_data is not None:
+                    padded_size = self._get_padded_size(key, cached_data)
+                    if padded_size is not None:
+                        cached_data = cached_data + b"\0" * (padded_size - len(cached_data))
+                    results.append((item_idx, prototype.buffer.from_bytes(cached_data)))
+                else:
+                    uncached.append((item_idx, offset, length, key))
+
+            if not uncached:
+                continue
+
+            # Re-compute merged range for uncached items only
+            uncached_start = min(r[1] for r in uncached)
+            uncached_end = max(r[1] + r[2] for r in uncached)
+
+            # Fetch the merged range
+            raw = _read_bytes_from_url(url, uncached_start, uncached_end - uncached_start)
+
+            # Split and deliver individual chunks
+            for item_idx, offset, length, key in uncached:
+                chunk_data = raw[offset - uncached_start:offset - uncached_start + length]
+
+                # Cache individual chunks
+                if self._local_cache is not None:
+                    from .local_cache import ChunkTooLargeError
+                    try:
+                        self._local_cache.put_remote_chunk(
+                            url=url, offset=offset, size=length, data=chunk_data
+                        )
+                    except ChunkTooLargeError:
+                        pass
+
+                # Apply padding
+                padded_size = self._get_padded_size(key, chunk_data)
+                if padded_size is not None:
+                    chunk_data = chunk_data + b"\0" * (padded_size - len(chunk_data))
+
+                results.append((item_idx, prototype.buffer.from_bytes(chunk_data)))
+
+        return results
 
     async def exists(self, key: str) -> bool:
         return key in self.rfs["refs"]
