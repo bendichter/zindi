@@ -125,6 +125,7 @@ pynwb NWBFile
 This is v0.1 — the following are not yet implemented:
 
 - Compound dtypes (`_COMPOUND_DTYPE`)
+- Cross-file object references (same-file references are supported)
 - External array links (`_EXTERNAL_ARRAY_LINK`)
 - Integration with `NWBZarrIO` (requires hdmf-zarr Zarr v3 migration)
 - Local chunk caching
