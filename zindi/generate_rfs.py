@@ -172,11 +172,15 @@ def _process_dataset(
     # Zarr doesn't allow zero-size chunks
     chunks = [max(c, 1) for c in chunks]
 
-    # Zarr v3 data_type string
-    data_type = _numpy_dtype_to_zarr_v3(dtype)
-
-    # Fill value
-    fill_value = _encode_fill_value(ds.fillvalue, dtype)
+    # Zarr v3 data_type
+    if dtype.kind == "V" and dtype.fields is not None:
+        # Compound dtype
+        data_type, compound_dtype_attr = _compound_dtype_to_zarr_v3(dtype)
+        attrs["_COMPOUND_DTYPE"] = compound_dtype_attr
+        fill_value = _encode_compound_fill_value(dtype)
+    else:
+        data_type = _numpy_dtype_to_zarr_v3(dtype)
+        fill_value = _encode_fill_value(ds.fillvalue, dtype)
 
     array_meta: dict[str, Any] = {
         "zarr_format": 3,
@@ -249,6 +253,47 @@ def _process_inline_dataset(
                 "base64:" + base64.b64encode(chunk_bytes).decode("ascii")
             )
             return
+
+    # Compound inline data
+    if ds.dtype.kind == "V" and ds.dtype.fields is not None:
+        shape = list(data.shape)
+        dtype = data.dtype
+        data_type, compound_dtype_attr = _compound_dtype_to_zarr_v3(dtype)
+        attrs["_COMPOUND_DTYPE"] = compound_dtype_attr
+        fill_value = _encode_compound_fill_value(dtype)
+
+        codec_pipeline = [
+            {"name": "bytes", "configuration": {"endian": "little"}}
+        ]
+
+        array_meta: dict[str, Any] = {
+            "zarr_format": 3,
+            "node_type": "array",
+            "shape": shape,
+            "data_type": data_type,
+            "chunk_grid": {
+                "name": "regular",
+                "configuration": {"chunk_shape": shape},
+            },
+            "chunk_key_encoding": {
+                "name": "default",
+                "configuration": {"separator": "/"},
+            },
+            "fill_value": fill_value,
+            "codecs": codec_pipeline,
+            "attributes": attrs,
+            "storage_transformers": [],
+        }
+
+        refs[f"{path}/zarr.json"] = json.dumps(array_meta, separators=(",", ":"))
+
+        # Ensure little-endian byte order
+        if dtype.byteorder == ">":
+            data = data.astype(dtype.newbyteorder("<"))
+        chunk_bytes = data.tobytes()
+        chunk_key = "c/" + "/".join(["0"] * max(len(shape), 1))
+        _add_inline_ref(refs, f"{path}/{chunk_key}", chunk_bytes)
+        return
 
     # Numeric inline data
     shape = list(data.shape)
@@ -398,8 +443,10 @@ def _should_inline(ds: h5py.Dataset) -> bool:
         # String/object data - always inline
         return True
     if ds.dtype.kind == "V" and ds.dtype.fields is not None:
-        # Compound type - inline for now (v1)
-        return True
+        # Compound type - inline small ones, use byte-range refs for large
+        if ds.size < 1000:
+            return True
+        return False
     if ds.size < 1000:
         return True
     return False
@@ -427,6 +474,44 @@ def _numpy_dtype_to_zarr_v3(dtype: np.dtype) -> str:
     if result is None:
         raise ValueError(f"Unsupported dtype for zarr v3: {dtype}")
     return result
+
+
+def _compound_dtype_to_zarr_v3(dtype: np.dtype) -> tuple[dict, list]:
+    """Convert a numpy structured dtype to zarr v3 structured data_type and _COMPOUND_DTYPE attr.
+
+    Returns
+    -------
+    (data_type_dict, compound_dtype_attr)
+        data_type_dict: zarr v3 data_type for zarr.json
+        compound_dtype_attr: list of {"name", "dtype"} dicts for _COMPOUND_DTYPE attribute
+    """
+    fields_zarr = []
+    fields_attr = []
+    for field_name in dtype.names:
+        field_dtype = dtype[field_name]
+        if field_dtype.kind == "S":
+            # Fixed-length byte string
+            zarr_type = {
+                "name": "null_terminated_bytes",
+                "configuration": {"length_bytes": field_dtype.itemsize},
+            }
+            attr_type = str(field_dtype)  # e.g. "|S10"
+        else:
+            zarr_type = _numpy_dtype_to_zarr_v3(field_dtype)
+            attr_type = zarr_type
+        fields_zarr.append([field_name, zarr_type])
+        fields_attr.append({"name": field_name, "dtype": attr_type})
+
+    data_type_dict = {
+        "name": "structured",
+        "configuration": {"fields": fields_zarr},
+    }
+    return data_type_dict, fields_attr
+
+
+def _encode_compound_fill_value(dtype: np.dtype) -> str:
+    """Encode a compound fill value as base64 zero bytes."""
+    return base64.b64encode(b"\x00" * dtype.itemsize).decode("ascii")
 
 
 def _encode_fill_value(fill_value: Any, dtype: np.dtype) -> Any:
