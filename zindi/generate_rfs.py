@@ -121,10 +121,13 @@ def write_rfs(
 def _write_rfs_parquet(rfs: dict, output_dir: str) -> None:
     """Write an RFS as a parquet directory (metadata.json + chunk_refs.parquet)."""
     import os
+    import shutil
 
     import pandas as pd
 
-    os.makedirs(output_dir, exist_ok=True)
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    os.makedirs(output_dir)
 
     metadata_refs: dict[str, Any] = {}
     chunk_rows: list[dict] = []
