@@ -72,6 +72,8 @@ class RfsStore(Store):
         self._merge_gap = merge_gap
         self._max_merge_size = max_merge_size
         self._executor = ThreadPoolExecutor(max_workers=32)
+        self._session = requests.Session()
+        self._session.headers["User-Agent"] = "Mozilla/5.0"
         self._is_open = True
 
     # -- Abstract method implementations --
@@ -212,7 +214,7 @@ class RfsStore(Store):
             uncached_end = max(r[1] + r[2] for r in uncached)
 
             # Fetch the merged range
-            raw = _read_bytes_from_url(url, uncached_start, uncached_end - uncached_start)
+            raw = _read_bytes_from_url(url, uncached_start, uncached_end - uncached_start, session=self._store._session)
 
             # Split and deliver individual chunks
             for item_idx, offset, length, key in uncached:
@@ -312,7 +314,7 @@ class RfsStore(Store):
                         cached = cached + b"\0" * (padded_size - len(cached))
                     return cached
 
-            data = _read_bytes_from_url_or_path(url_or_path, offset, length)
+            data = _read_bytes_from_url_or_path(url_or_path, offset, length, session=self._session)
 
             # Store in local cache
             if self._local_cache is not None and is_url:
@@ -414,28 +416,33 @@ def _zarr_field_type_to_numpy(field_type: str | dict) -> str:
     raise ValueError(f"Unsupported zarr field type: {field_type}")
 
 
-def _read_bytes_from_url_or_path(url_or_path: str, offset: int, length: int) -> bytes:
+def _read_bytes_from_url_or_path(
+    url_or_path: str, offset: int, length: int, *, session: requests.Session | None = None
+) -> bytes:
     """Read a byte range from a URL or local file path."""
     if url_or_path.startswith("http://") or url_or_path.startswith("https://"):
-        return _read_bytes_from_url(url_or_path, offset, length)
+        return _read_bytes_from_url(url_or_path, offset, length, session=session)
     else:
         with open(url_or_path, "rb") as f:
             f.seek(offset)
             return f.read(length)
 
 
-def _read_bytes_from_url(url: str, offset: int, length: int) -> bytes:
+def _read_bytes_from_url(
+    url: str, offset: int, length: int, *, session: requests.Session | None = None
+) -> bytes:
     """Read a byte range from a URL with retry and DANDI resolution."""
     num_retries = 8
     for try_num in range(num_retries):
         try:
             resolved_url = resolve_url(url)
             range_header = f"bytes={offset}-{offset + length - 1}"
-            headers = {
-                "User-Agent": "Mozilla/5.0",
-                "Range": range_header,
-            }
-            response = requests.get(resolved_url, headers=headers)
+            headers = {"Range": range_header}
+            if session is not None:
+                response = session.get(resolved_url, headers=headers)
+            else:
+                headers["User-Agent"] = "Mozilla/5.0"
+                response = requests.get(resolved_url, headers=headers)
             response.raise_for_status()
             return response.content
         except Exception as e:
