@@ -104,14 +104,15 @@ def write_rfs(
     if format not in valid_formats:
         raise ValueError(f"Invalid format: {format!r}. Expected one of {sorted(valid_formats)}")
 
-    if format == "auto":
+    selected_format = format
+    if selected_format == "auto":
         chunk_count = sum(
             1 for v in rfs["refs"].values()
             if isinstance(v, list) and len(v) == 3
         )
-        format = "parquet" if chunk_count > inline_threshold else "json"
+        selected_format = "parquet" if chunk_count > inline_threshold else "json"
 
-    if format == "parquet":
+    if selected_format == "parquet":
         _write_rfs_parquet(rfs, output_path)
     else:
         with open(output_path, "w") as f:
@@ -126,8 +127,15 @@ def _write_rfs_parquet(rfs: dict, output_dir: str) -> None:
     import pandas as pd
 
     if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
-    os.makedirs(output_dir)
+        if not os.path.isdir(output_dir):
+            raise ValueError(f"Output path exists and is not a directory: {output_dir}")
+        # Remove only managed files to avoid deleting unrelated content
+        for fname in ("metadata.json", "chunk_refs.parquet"):
+            fpath = os.path.join(output_dir, fname)
+            if os.path.exists(fpath):
+                os.remove(fpath)
+    else:
+        os.makedirs(output_dir)
 
     metadata_refs: dict[str, Any] = {}
     chunk_rows: list[dict] = []
