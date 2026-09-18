@@ -14,6 +14,7 @@ dependencies = [
     "numcodecs>=0.14.0",
     "fsspec",
     "tqdm",
+    "requests",
 ]
 
 [project.optional-dependencies]
