@@ -89,6 +89,18 @@ def write_rfs(rfs: dict, output_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _chunk_key(ndim: int) -> str:
+    """Build the zarr v3 chunk key for the first chunk of an array.
+
+    A zero-dimensional array has a single chunk keyed "c". An array with
+    ndim dimensions keys its first chunk "c/0/.../0" with one index per
+    dimension.
+    """
+    if ndim == 0:
+        return "c"
+    return "c/" + "/".join(["0"] * ndim)
+
+
 def _process_group(
     item: h5py.Group,
     path: str,
@@ -152,11 +164,6 @@ def _process_dataset(
     dtype = ds.dtype
     is_scalar = ds.ndim == 0
 
-    # Handle scalar datasets
-    if is_scalar:
-        attrs["_SCALAR"] = True
-        shape = [1]
-
     # Determine if this should be inlined
     inline = _should_inline(ds)
 
@@ -219,29 +226,33 @@ def _process_inline_dataset(
     data = ds[()]
 
     if is_scalar:
-        shape = [1]
+        shape = []
         if isinstance(data, h5py.Reference):
             # Scalar object reference — store target path as plain string
-            attrs["_SCALAR"] = True
             attrs["_DTYPE"] = "object_reference"
             target = h5f[data]
             array_meta = _make_string_array_meta(shape, attrs)
             refs[f"{path}/zarr.json"] = json.dumps(array_meta, separators=(",", ":"))
             chunk_bytes = _encode_vlen_utf8([target.name])
-            refs[f"{path}/c/0"] = "base64:" + base64.b64encode(chunk_bytes).decode("ascii")
+            chunk_key = _chunk_key(len(shape))
+            refs[f"{path}/{chunk_key}"] = (
+                "base64:" + base64.b64encode(chunk_bytes).decode("ascii")
+            )
             return
         if isinstance(data, bytes):
             data = data.decode("utf-8")
         if isinstance(data, str):
             # String scalar
-            attrs["_SCALAR"] = True
             array_meta = _make_string_array_meta(shape, attrs)
             refs[f"{path}/zarr.json"] = json.dumps(array_meta, separators=(",", ":"))
             chunk_bytes = _encode_vlen_utf8([data])
-            refs[f"{path}/c/0"] = "base64:" + base64.b64encode(chunk_bytes).decode("ascii")
+            chunk_key = _chunk_key(len(shape))
+            refs[f"{path}/{chunk_key}"] = (
+                "base64:" + base64.b64encode(chunk_bytes).decode("ascii")
+            )
             return
         else:
-            data = np.array([data])
+            data = np.asarray(data)
     else:
         if h5py.check_dtype(ref=ds.dtype) == h5py.Reference:
             # Object reference array — store target paths as plain strings
@@ -261,7 +272,7 @@ def _process_inline_dataset(
             refs[f"{path}/zarr.json"] = json.dumps(array_meta, separators=(",", ":"))
 
             chunk_bytes = _encode_vlen_utf8(path_strs)
-            chunk_key = "c/" + "/".join(["0"] * max(ds.ndim, 1))
+            chunk_key = _chunk_key(ds.ndim)
             refs[f"{path}/{chunk_key}"] = (
                 "base64:" + base64.b64encode(chunk_bytes).decode("ascii")
             )
@@ -282,7 +293,7 @@ def _process_inline_dataset(
             refs[f"{path}/zarr.json"] = json.dumps(array_meta, separators=(",", ":"))
 
             chunk_bytes = _encode_vlen_utf8(str_data)
-            chunk_key = "c/" + "/".join(["0"] * max(ds.ndim, 1))
+            chunk_key = _chunk_key(ds.ndim)
             refs[f"{path}/{chunk_key}"] = (
                 "base64:" + base64.b64encode(chunk_bytes).decode("ascii")
             )
@@ -331,7 +342,7 @@ def _process_inline_dataset(
         if dtype.byteorder == ">":
             data = data.astype(dtype.newbyteorder("<"))
         chunk_bytes = data.tobytes()
-        chunk_key = "c/" + "/".join(["0"] * max(len(shape), 1))
+        chunk_key = _chunk_key(len(shape))
         _add_inline_ref(refs, f"{path}/{chunk_key}", chunk_bytes)
         return
 
@@ -371,7 +382,7 @@ def _process_inline_dataset(
     if dtype.byteorder == ">":
         data = data.astype(dtype.newbyteorder("<"))
     chunk_bytes = data.tobytes()
-    chunk_key = "c/" + "/".join(["0"] * max(len(shape), 1))
+    chunk_key = _chunk_key(len(shape))
     _add_inline_ref(refs, f"{path}/{chunk_key}", chunk_bytes)
 
 
@@ -432,8 +443,7 @@ def _add_chunk_refs(
     else:
         # Contiguous dataset - single chunk
         byte_offset, byte_count = get_byte_range_for_contiguous_dataset(ds)
-        indices = "/".join(["0"] * ds.ndim)
-        chunk_key = f"{path}/c/{indices}"
+        chunk_key = f"{path}/{_chunk_key(ds.ndim)}"
         refs[chunk_key] = [url, byte_offset, byte_count]
 
 

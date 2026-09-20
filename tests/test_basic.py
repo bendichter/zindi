@@ -182,11 +182,18 @@ class TestBasicRoundtrip:
         np.testing.assert_array_equal(result, [1.0, 2.0, 3.0])
 
     def test_scalar_dataset(self):
-        """Scalar dataset round-trips."""
+        """Scalar dataset round-trips as a zero-dimensional array."""
         root = open_rfs(self.rfs)
         arr = root["acquisition/scalar_int"]
-        assert arr.shape == (1,)
-        assert arr[0] == 99
+        assert arr.shape == ()
+        assert arr[()] == 99
+
+    def test_scalar_dataset_metadata(self):
+        """Scalar dataset metadata describes a zero-dimensional array."""
+        meta = json.loads(self.rfs["refs"]["acquisition/scalar_int/zarr.json"])
+        assert meta["shape"] == []
+        assert meta["chunk_grid"]["configuration"]["chunk_shape"] == []
+        assert "acquisition/scalar_int/c" in self.rfs["refs"]
 
     def test_compressed_dataset(self):
         """Gzip-compressed dataset reads correctly via numcodecs.zlib."""
@@ -222,11 +229,18 @@ class TestBasicRoundtrip:
         np.testing.assert_array_equal(result, expected)
 
     def test_string_scalar(self):
-        """String scalar dataset reads back."""
+        """String scalar dataset reads back from a zero-dimensional array."""
         root = open_rfs(self.rfs)
         arr = root["acquisition/name"]
-        val = arr[0]
-        assert val == "my_timeseries"
+        assert arr.shape == ()
+        assert arr[()] == "my_timeseries"
+
+    def test_string_scalar_metadata(self):
+        """String scalar metadata describes a zero-dimensional array."""
+        meta = json.loads(self.rfs["refs"]["acquisition/name/zarr.json"])
+        assert meta["shape"] == []
+        assert meta["chunk_grid"]["configuration"]["chunk_shape"] == []
+        assert "acquisition/name/c" in self.rfs["refs"]
 
     def test_string_array(self):
         """String array dataset reads back."""
@@ -364,8 +378,8 @@ class TestBasicRoundtrip:
         """Scalar object reference stores target path as plain string."""
         root = open_rfs(self.rfs)
         arr = root["acquisition/ref_scalar"]
-        assert arr.shape == (1,)
-        assert str(arr[0]) == "/acquisition/timeseries"
+        assert arr.shape == ()
+        assert str(arr[()]) == "/acquisition/timeseries"
 
     def test_object_reference_dtype_attr(self):
         """Object reference datasets have _DTYPE in zarr.json metadata."""
@@ -375,7 +389,9 @@ class TestBasicRoundtrip:
 
         meta_scalar = json.loads(self.rfs["refs"]["acquisition/ref_scalar/zarr.json"])
         assert meta_scalar["attributes"]["_DTYPE"] == "object_reference"
-        assert meta_scalar["attributes"]["_SCALAR"] is True
+        assert meta_scalar["shape"] == []
+        assert meta_scalar["chunk_grid"]["configuration"]["chunk_shape"] == []
+        assert "acquisition/ref_scalar/c" in self.rfs["refs"]
 
     def test_compound_with_references(self):
         """Compound dataset with reference field round-trips correctly."""

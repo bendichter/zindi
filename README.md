@@ -88,7 +88,7 @@ The generated JSON follows the [unified Zarr v3 convention](https://github.com/h
 |---------|-----------|
 | Groups | `zarr.json` with `node_type: "group"` |
 | Arrays | `zarr.json` with `node_type: "array"`, codecs pipeline |
-| Scalars | `_SCALAR: true` attribute, stored as shape `[1]` |
+| Scalars | Zero-dimensional array: `shape: []`, `chunk_shape: []`, single chunk keyed `c` |
 | Soft links | `_LINKS` list on parent group: `[{"name", "source", "path"}]` |
 | References in attrs | `{"_REFERENCE": {"source": ".", "path": "/target"}}` |
 | NaN/Inf in attrs | Encoded as `"NaN"`, `"Infinity"`, `"-Infinity"` strings |
