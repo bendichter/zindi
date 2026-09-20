@@ -1,7 +1,11 @@
 """Convert HDF5 attributes to JSON-serializable values.
 
-Handles NaN/Inf encoding, numpy type conversion, and h5py references.
+Handles numpy type conversion and h5py references.
 For v1, references are converted to the unified convention format.
+
+Float NaN and Inf are passed through as floats. ``json.dumps`` writes them as the
+bare tokens ``NaN``, ``Infinity``, and ``-Infinity``, matching zarr-python, which
+keeps a float distinct from a string holding the same text.
 
 Ported from lindi with adaptations for the unified zarr v3 convention.
 """
@@ -27,13 +31,12 @@ def h5_attr_to_zarr(
     elif isinstance(attr, (int, np.integer)):
         return int(attr)
     elif isinstance(attr, (float, np.floating)):
-        return _encode_nan_inf(float(attr))
+        return float(attr)
     elif isinstance(attr, (complex, np.complexfloating)):
         raise ValueError(f"Complex attributes not supported at {label}")
     elif isinstance(attr, (bool, np.bool_)):
         return bool(attr)
     elif isinstance(attr, str):
-        _check_special_string(attr, label)
         return attr
     elif isinstance(attr, bytes):
         return attr.decode("utf-8")
@@ -54,7 +57,7 @@ def _convert_ndarray_attr(attr: np.ndarray, *, label: str) -> Any:
     if kind in ("i", "u"):
         return attr.tolist()
     elif kind == "f":
-        return _encode_nan_inf(attr.tolist())
+        return attr.tolist()
     elif kind == "c":
         raise ValueError(f"Complex array attributes not supported at {label}")
     elif kind == "b":
@@ -81,31 +84,6 @@ def _h5_ref_to_zarr_attr(ref: h5py.Reference, *, h5f: h5py.File) -> dict:
             "path": target.name,
         }
     }
-
-
-# -- NaN/Inf encoding for JSON --
-
-_SPECIAL_STRINGS = ("NaN", "Infinity", "-Infinity")
-
-
-def _check_special_string(val: str, label: str) -> None:
-    if val in _SPECIAL_STRINGS:
-        raise ValueError(
-            f"Special string {val!r} not allowed in attribute at {label}"
-        )
-
-
-def _encode_nan_inf(val: Any) -> Any:
-    if isinstance(val, list):
-        return [_encode_nan_inf(v) for v in val]
-    elif isinstance(val, (float, np.floating)):
-        if np.isnan(val):
-            return "NaN"
-        elif val == float("inf"):
-            return "Infinity"
-        elif val == float("-inf"):
-            return "-Infinity"
-    return val
 
 
 # -- Helpers --

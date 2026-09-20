@@ -1,6 +1,7 @@
 """End-to-end tests for zindi: HDF5 → zarr v3 RFS → read back."""
 
 import json
+import math
 import tempfile
 
 import h5py
@@ -66,9 +67,10 @@ def _create_test_hdf5(path: str) -> None:
         # Boolean dataset
         g.create_dataset("mask", data=np.array([True, False, True]))
 
-        # NaN/Inf in attributes
+        # NaN/Inf in attributes, alongside a string holding the same text
         g.attrs["nan_value"] = float("nan")
         g.attrs["inf_value"] = float("inf")
+        g.attrs["nan_text"] = "NaN"
 
         # Compound datasets
         cpd_dtype = np.dtype([("x", "i4"), ("y", "f8")])
@@ -241,11 +243,13 @@ class TestBasicRoundtrip:
         assert acq.attrs["unit"] == "volts"
 
     def test_nan_inf_attrs(self):
-        """NaN and Inf are encoded as strings in attributes."""
+        """NaN and Inf stay floats in attributes, and a string keeping the same text stays a string."""
         root_meta = json.loads(self.rfs["refs"]["acquisition/zarr.json"])
         attrs = root_meta["attributes"]
-        assert attrs["nan_value"] == "NaN"
-        assert attrs["inf_value"] == "Infinity"
+        assert isinstance(attrs["nan_value"], float) and math.isnan(attrs["nan_value"])
+        assert attrs["inf_value"] == float("inf")
+        assert attrs["nan_text"] == "NaN"
+        assert isinstance(attrs["nan_text"], str)
 
     def test_soft_link_in_links(self):
         """Soft links appear in parent group's _LINKS attribute."""
